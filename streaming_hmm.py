@@ -701,6 +701,12 @@ def make_gp_forecast_fn(
     ) -> Dict[str, jax.Array]:
         """
         Posterior predictive for GP observation model with multi-step-ahead forecasts.
+        
+        For h-step ahead forecasts, uses h-step transition probabilities Π^h.
+        
+        Approximation: Does not marginalize over intermediate observations y(t+1:t+h-1),
+        which is computationally intractable (would require K^h regime paths and
+        integration over continuous intermediate observations).
         """
         _, x = obs_input
         x = jnp.atleast_1d(x)
@@ -712,7 +718,12 @@ def make_gp_forecast_fn(
         timestep = bel.timestep.astype(int)[0]
         regime = bel.regime[:, timestep]
 
-        p_transition = transition_matrix.at[regime].get()
+        # Compute h-step transition probabilities: Π^h for h=1,2,...,n_ahead
+        # Shape: (n_ahead, n_regimes, n_regimes)
+        transition_powers = jnp.stack([
+            jnp.linalg.matrix_power(transition_matrix, h) 
+            for h in range(1, n_ahead + 1)
+        ])
 
         # Compute predictive for each particle and regime
         def particle_regime_pred(s_k):
@@ -736,9 +747,14 @@ def make_gp_forecast_fn(
         mus = mus.reshape(n_particles, n_regimes, n_ahead)
         vars_ = vars_.reshape(n_particles, n_regimes, n_ahead)
 
-        # Weighted average
-        yhat = jnp.einsum("s,sk,skh->h", weights, p_transition, mus)
-        mean2 = jnp.einsum("s,sk,skh->h", weights, p_transition, mus ** 2 + vars_)
+        # Extract h-step transition probabilities for each particle's current regime
+        # p_transition_h[s, h, k] = P(s_{t+h}=k | s_t=regime[s])
+        p_transition_h = transition_powers[:, regime, :]  # (n_ahead, n_particles, n_regimes)
+        p_transition_h = jnp.transpose(p_transition_h, (1, 2, 0))  # (n_particles, n_regimes, n_ahead)
+
+        # Weighted average using h-step transition probabilities
+        yhat = jnp.einsum("s,skh,skh->h", weights, p_transition_h, mus)
+        mean2 = jnp.einsum("s,skh,skh->h", weights, p_transition_h, mus ** 2 + vars_)
         yhat2 = mean2 + cfg.var_obs
 
         yhat_std = jnp.sqrt(jnp.maximum(yhat2 - yhat ** 2, 0.0))
