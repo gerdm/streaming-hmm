@@ -443,7 +443,7 @@ def ar_forecast_fn(
 
 
 # ============================================================
-# GP Observation Model
+# Gaussian Process (GP) Observation Model 
 # ============================================================
 
 def gaussian_kernel(sigma2: float) -> Callable:
@@ -523,8 +523,8 @@ def init_gp_particles(
     timestep = jnp.zeros(n_particles)
 
     regimes = jnp.zeros((n_particles, n_steps)).astype(int)
-    regimes_init = jax.random.choice(key_regimes, n_regimes, (n_particles,)).astype(int)
-    regimes = regimes.at[:, 0].set(regimes_init)
+    # regimes_init = jax.random.choice(key_regimes, n_regimes, (n_particles,)).astype(int)
+    # regimes = regimes.at[:, 0].set(regimes_init)
 
     return GPParticleState(
         X_buffers=X_buffers,
@@ -654,7 +654,8 @@ def make_gp_update_fn(
         mu_pred, cov_pred = _gp_predictive(
             X_train, y_train, x, counter, kernel, cfg.var_obs
         )
-        pred_var = jnp.maximum(cov_pred[0, 0] + cfg.var_obs, 1e-6)
+        print("Reload with debug prints")
+        pred_var = jnp.maximum(cov_pred[0, 0], 1e-6)
         pred_std = jnp.sqrt(pred_var)
         log_pp = jax.scipy.stats.norm.logpdf(y, mu_pred[0], pred_std)
 
@@ -967,6 +968,7 @@ def gp_step(
 ) -> Tuple[GPParticleState, Tuple[jax.Array, jax.Array, jax.Array, Dict[str, jax.Array]]]:
     """
     One step of streaming HMM inference for GP observation model.
+    # TODO: Remove dependence on transition_matrix. We only need log_transition_matrix.
 
     Args:
         bel: Current GP particle state.
@@ -992,11 +994,12 @@ def gp_step(
 
     # Update log-weights [S*K]
     bel_update = update_log_weights(bel_update, log_pp, log_p_transition)
+    log_weight_update = bel_update.log_weight
 
     # Beam search: keep top-K [S*K -> S]
     bel_update = beam_search(bel_update, cfg.num_particles)
 
-    return bel_update, (bel_update.log_weight, bel_update.y_buffers, bel_update.X_buffers, fcst)
+    return bel_update, (bel_update.log_weight, bel_update.y_buffers, bel_update.X_buffers, fcst, log_weight_update)
 
 
 def run_gp_streaming_hmm(
@@ -1060,9 +1063,9 @@ def run_gp_streaming_hmm(
         forecast_fn=forecast_fn,
     )
 
-    bel_final, (hist_lw, hist_y_buffers, hist_X_buffers, hist_forecast) = jax.lax.scan(
+    bel_final, (hist_lw, hist_y_buffers, hist_X_buffers, hist_forecast, hist_logpp) = jax.lax.scan(
         _step, bel_init, (y, X)
     )
     hist_weights = build_weights(hist_lw)
 
-    return bel_final, (hist_lw, hist_y_buffers, hist_X_buffers, hist_forecast), hist_weights
+    return bel_final, (hist_lw, hist_y_buffers, hist_X_buffers, hist_forecast, hist_logpp), hist_weights
