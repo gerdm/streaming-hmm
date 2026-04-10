@@ -1,5 +1,7 @@
 # Streaming HMM: Predictive-First Online Regime Inference
 
+Tutorial post: https://grdm.io/posts/hidden-markov-model
+
 This repository contains the code for the paper **"A Predictive View on Streaming Hidden Markov Models"**.
 
 The project implements an online Hidden Markov Model (HMM) framework designed for **streaming prediction and regime tracking** under strict compute budgets.
